@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LAYERS_DIR="${1:-/layers}"
+PLATFORM_DIR="${2:-}"
+PLAN_PATH="${3:-}"
+BUILD_DIR="${4:-$(pwd)}"
+
+cd "$BUILD_DIR"
+
+log() {
+  echo "sonarqube-buildpack: $*"
+}
+
+fail() {
+  echo "sonarqube-buildpack: ERROR: $*" >&2
+  exit 1
+}
+
+is_true() {
+  local value="${1:-false}"
+  value="${value,,}"
+  case "$value" in
+    true|1|yes|on)
+      return 0
+      ;;
+    false|0|no|off|"")
+      return 1
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+
+add_if_missing() {
+  local current="$1"
+  local key="$2"
+  local value="$3"
+
+  if [[ "$current" == *"$key"* ]]; then
+    printf '%s' "$current"
+  else
+    if [[ -n "$current" ]]; then
+      printf '%s %s' "$current" "$value"
+    else
+      printf '%s' "$value"
+    fi
+  fi
+}
+
+sonar_api_get() {
+  local path="$1"
+  local data_key="$2"
+  local data_value="$3"
+
+  local base_url="${BP_SONARQUBE_URL%/}"
+
+  if [[ -n "$data_key" ]]; then
+    curl -sS --fail --get \
+      --data-urlencode "${data_key}=${data_value}" \
+      -u "${BP_SONARQUBE_APIKEY}:" \
+      "${base_url}${path}"
+  else
+    curl -sS --fail \
+      -u "${BP_SONARQUBE_APIKEY}:" \
+      "${base_url}${path}"
+  fi
+}
+
+sonar_api_post() {
+  local path="$1"
+  shift
+  local form_args=("$@")
+
+  local base_url="${BP_SONARQUBE_URL%/}"
+  curl -sS --fail -X POST \
+    -u "${BP_SONARQUBE_APIKEY}:" \
+    "${base_url}${path}" \
+    "${form_args[@]}"
+}
+
+mode="${BP_SONARQUBE_SCANNER_MODE:-auto}"
+enabled="${BP_SONARQUBE_ENABLED:-false}"
+strict="${BP_SONARQUBE_STRICT:-false}"
+auto_create="${BP_SONARQUBE_AUTO_CREATE_PROJECT:-true}"
+
+enabled_status=0
+is_true "$enabled" || enabled_status=$?
+if [[ "$enabled_status" -eq 2 ]]; then
+  fail "Invalid BP_SONARQUBE_ENABLED value: ${enabled}"
+elif [[ "$enabled_status" -eq 1 ]]; then
+  log "BP_SONARQUBE_ENABLED is false or unset; nothing to do"
+  exit 0
+fi
+
+: "${BP_SONARQUBE_URL:?BP_SONARQUBE_URL is required when BP_SONARQUBE_ENABLED=true}"
+: "${BP_SONARQUBE_APIKEY:?BP_SONARQUBE_APIKEY is required when BP_SONARQUBE_ENABLED=true}"
+: "${BP_SONARQUBE_PROJECT_KEY:?BP_SONARQUBE_PROJECT_KEY is required when BP_SONARQUBE_ENABLED=true}"
+
+case "$mode" in
+  auto|maven-inline)
+    ;;
+  *)
+    fail "Unsupported BP_SONARQUBE_SCANNER_MODE=$mode (MVP supports only auto, maven-inline)"
+    ;;
+esac
+
+if [[ "$mode" == "maven-inline" && ! -f "pom.xml" ]]; then
+  fail "maven-inline mode requires pom.xml"
+elif [[ "$mode" == "auto" && ! -f "pom.xml" ]]; then
+  log "auto mode found no pom.xml; no Maven mutation required"
+  exit 0
+fi
+
+strict_status=0
+is_true "$strict" || strict_status=$?
+if [[ "$strict_status" -eq 2 ]]; then
+  fail "Invalid BP_SONARQUBE_STRICT value: ${strict}"
+fi
+QUALITY_GATE_WAIT="false"
+if [[ "$strict_status" -eq 0 ]]; then
+  QUALITY_GATE_WAIT="true"
+fi
+
+auto_create_status=0
+is_true "$auto_create" || auto_create_status=$?
+if [[ "$auto_create_status" -eq 2 ]]; then
+  fail "Invalid BP_SONARQUBE_AUTO_CREATE_PROJECT value: ${auto_create}"
+fi
+
+if [[ -n "${BP_SONARQUBE_BRANCH:-}" ]]; then
+  log "BP_SONARQUBE_BRANCH is ignored for SonarQube Community (no branch analysis support)"
+fi
+
+log "Detected scanner mode: $mode"
+log "Project key: ${BP_SONARQUBE_PROJECT_KEY}"
+
+project_key="${BP_SONARQUBE_PROJECT_KEY}"
+project_name="${BP_SONARQUBE_PROJECT_NAME:-$project_key}"
+
+# Ensure project exists / auto-create when needed.
+search_response="$(sonar_api_get '/api/projects/search' 'projects' "$project_key")"
+if printf '%s' "$search_response" | grep -qF "\"key\":\"${project_key}\""; then
+  log "SonarQube project ${project_key} already exists"
+else
+  if [[ "$auto_create_status" -eq 1 ]]; then
+    fail "SonarQube project ${project_key} does not exist and auto-create is disabled"
+  fi
+
+  log "Creating SonarQube project ${project_key}"
+  create_response="$(sonar_api_post '/api/projects/create' -d "project=$project_key" -d "name=$project_name")"
+  if ! printf '%s' "$create_response" | grep -qF '"project"'; then
+    fail "Failed to create SonarQube project ${project_key}"
+  fi
+  log "SonarQube project ${project_key} created"
+fi
+
+maven_args="${BP_MAVEN_BUILD_ARGUMENTS:- --batch-mode -Dmaven.test.skip=true package}"
+maven_args="${maven_args# }"
+
+if [[ "$maven_args" != *"sonar:sonar"* ]]; then
+  maven_args="$maven_args sonar:sonar"
+fi
+
+maven_args="$(add_if_missing "$maven_args" '-Dsonar.host.url=' "-Dsonar.host.url=${BP_SONARQUBE_URL}")"
+maven_args="$(add_if_missing "$maven_args" '-Dsonar.projectKey=' "-Dsonar.projectKey=${project_key}")"
+maven_args="$(add_if_missing "$maven_args" '-Dsonar.projectName=' "-Dsonar.projectName=${project_name}")"
+maven_args="$(add_if_missing "$maven_args" '-Dsonar.qualitygate.wait=' "-Dsonar.qualitygate.wait=${QUALITY_GATE_WAIT}")"
+
+if [[ -n "${BP_SONARQUBE_EXTRA_ARGS:-}" ]]; then
+  maven_args="${maven_args} ${BP_SONARQUBE_EXTRA_ARGS}"
+fi
+
+layer_dir="${LAYERS_DIR}/sonarqube-env"
+env_dir="${layer_dir}/env"
+mkdir -p "$env_dir"
+
+cat > "${layer_dir}.toml" <<EOF
+[types]
+build = true
+cache = false
+launch = false
+EOF
+
+printf '%s\n' "${maven_args}" > "${env_dir}/BP_MAVEN_BUILD_ARGUMENTS.override"
+printf '%s\n' "${BP_SONARQUBE_APIKEY}" > "${env_dir}/SONAR_TOKEN.override"
+printf '%s\n' "${BP_SONARQUBE_URL}" > "${env_dir}/SONAR_HOST_URL.override"
+
+log "Prepared Maven args for downstream buildpacks:"
+log "${maven_args}"
+log "SonarQube buildpack completed"

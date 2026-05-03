@@ -1,0 +1,4 @@
+[project]
+id = "bs23-buildpacks/sonarqube"
+name = "BS23 SonarQube Buildpack"
+version = "0.1.0"

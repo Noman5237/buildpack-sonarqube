@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+platform_path="${1:-}"
+plan_path="${2:-}"
+
+log() {
+  echo "sonarqube-buildpack: $*"
+}
+
+is_true() {
+  local value="${1:-false}"
+  value="${value,,}"
+  case "$value" in
+    true|1|yes|on)
+      return 0
+      ;;
+    false|0|no|off|"")
+      return 1
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+
+mode="${BP_SONARQUBE_SCANNER_MODE:-auto}"
+enabled="${BP_SONARQUBE_ENABLED:-}"
+
+enabled_status=0
+is_true "$enabled" || enabled_status=$?
+case "$enabled_status" in
+  0)
+    ;;
+  1)
+    log "BP_SONARQUBE_ENABLED is false or unset; buildpack optional skip"
+    exit 100
+    ;;
+  2)
+    log "Invalid BP_SONARQUBE_ENABLED value: ${enabled}"
+    exit 1
+    ;;
+esac
+
+: "${BP_SONARQUBE_URL:?BP_SONARQUBE_URL is required when BP_SONARQUBE_ENABLED=true}"
+: "${BP_SONARQUBE_APIKEY:?BP_SONARQUBE_APIKEY is required when BP_SONARQUBE_ENABLED=true}"
+: "${BP_SONARQUBE_PROJECT_KEY:?BP_SONARQUBE_PROJECT_KEY is required when BP_SONARQUBE_ENABLED=true}"
+
+case "$mode" in
+  auto|maven-inline)
+    ;;
+  *)
+    log "Unsupported BP_SONARQUBE_SCANNER_MODE=$mode"
+    log "Current MVP supports: auto, maven-inline"
+    exit 1
+    ;;
+esac
+
+if [[ "$mode" == "maven-inline" ]]; then
+  if [[ ! -f "pom.xml" ]]; then
+    log "maven-inline mode requires pom.xml in source"
+    exit 1
+  fi
+else
+  if [[ ! -f "pom.xml" ]]; then
+    log "auto mode did not find a Maven project; skipping"
+    exit 100
+  fi
+fi
+
+if [[ -n "$platform_path" ]]; then
+  platform_path="${platform_path%/}/"
+  log "platform_path: ${platform_path}"
+fi
+
+if [[ -n "$plan_path" ]]; then
+  mkdir -p "$(dirname "$plan_path")"
+  cat > "$plan_path" <<EOF
+[[provides]]
+name = "sonarqube"
+EOF
+fi
+
+log "SonarQube buildpack detected and enabled"
+exit 0

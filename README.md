@@ -1,6 +1,6 @@
 # SonarQube Buildpack (CNB for Paketo Java flow)
 
-This repository builds a Cloud Native Buildpack (`bs23-buildpacks/sonarqube`) intended to be used in the same builder as Paketo Java. It is designed to run **only** when explicitly enabled via env:
+This repository builds a Cloud Native Buildpack (`bs23-buildpacks/sonarqube`) intended to be used in the same builder as Paketo Java. It is designed to be used only when explicitly enabled via env:
 
 ```text
 BP_SONARQUBE_ENABLED=true
@@ -12,14 +12,14 @@ This keeps build runtime fast and avoids a second Maven execution.
 
 ## Key assumptions from platform
 
-- Buildpack target: Java on Linux/amd64
+- Build target: Java on Linux/amd64
 - SonarQube edition: **Community**
   - No branch analysis
   - No PR decoration
 - Token source: Kubernetes Secret (never ConfigMap)
 - Default behavior:
   - No quality gate wait unless `BP_SONARQUBE_STRICT=true`
-  - SonarQube project auto-creation enabled
+  - SonarQube project auto-creation enabled by default
 
 ## How it integrates with Paketo
 
@@ -34,7 +34,7 @@ order:
   - id: paketo-buildpacks/opentelemetry
 ```
 
-Because the build is running in-order, the SonarQube buildpack writes a build-only layer with environment overrides that are picked up by Paketo Java in the same build execution.
+Because the build is executed in-order, the SonarQube buildpack writes a build-only layer with environment overrides that are picked up by Paketo Java in the same build execution.
 
 Paketo-compatible behavior implemented:
 
@@ -47,7 +47,7 @@ Paketo-compatible behavior implemented:
 This ensures:
 
 - The updated Maven arguments are visible to subsequent buildpacks (including Paketo Java).
-- No Sonar credentials are exposed to launch/runtime.
+- Sonar credentials are not exposed to launch/runtime.
 
 ## Implemented behavior (MVP / phase 4)
 
@@ -60,7 +60,7 @@ This ensures:
    - No-op (`exit 100`) when mode is `auto` and no `pom.xml`.
 
 2. **Build** (`bin/build`)
-   - Verifies enablement and required vars.
+   - Verifies enabled state and required vars.
    - Mutates Maven args for downstream build:
      - preserves existing `BP_MAVEN_BUILD_ARGUMENTS`
      - appends `sonar:sonar`
@@ -70,7 +70,7 @@ This ensures:
    - Creates project when missing and `BP_SONARQUBE_AUTO_CREATE_PROJECT=true`.
 
 3. **Community restrictions**
-   - Branch-related variables are ignored and logged as informational, because SonarQube Community does not support branch analysis.
+   - Branch-related scanner arguments are intentionally ignored.
 
 ## Supported env vars
 
@@ -85,18 +85,17 @@ This ensures:
 
 - `BP_SONARQUBE_PROJECT_NAME`
 - `BP_SONARQUBE_STRICT`
-- `BP_SONARQUBE_SCANNER_MODE` (`auto`  `maven-inline`)
+- `BP_SONARQUBE_SCANNER_MODE` (`auto`, `maven-inline`)
 - `BP_MAVEN_BUILD_ARGUMENTS`
-- `BP_SONARQUBE_QUALITYGATE_WAIT`
 - `BP_SONARQUBE_AUTO_CREATE_PROJECT` (default: `true`)
 - `BP_SONARQUBE_EXTRA_ARGS`
 
-## Working notes for kpack integration
+## Notes for kpack integration
 
 A separate kpack manifest workflow step should inject:
 
-- `BP_SONARQUBE_APIKEY` via Secret `valueFrom`.
-- Non-secret values (`URL`, `PROJECT_KEY`, etc.) via ConfigMap.
+- `BP_SONARQUBE_APIKEY` from Secret via `valueFrom`.
+- Non-secret values (`URL`, `PROJECT_KEY`, etc.) from ConfigMap.
 
 ## Packaging
 

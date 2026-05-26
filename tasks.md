@@ -64,7 +64,8 @@ bs23-buildpacks/sonarqube
 - [ ] Validate required variables when enabled:
   - [ ] `BP_SONARQUBE_URL` (from params)
   - [ ] `BP_SONARQUBE_APIKEY`
-  - [ ] `BP_SONARQUBE_PROJECT_KEY`
+  - [ ] `BP_SONARQUBE_REPO_NAME`
+  - [ ] `BP_SONARQUBE_REPO_BRANCH`
 - [ ] Ensure missing required variables fail only when `BP_SONARQUBE_ENABLED=true`.
 - [ ] Ensure disabled mode exits `100` so optional buildpack does not block normal builds.
 - [ ] Ensure detect logs do not print token values.
@@ -75,9 +76,10 @@ bs23-buildpacks/sonarqube
 
 - [ ] Implement `bin/build` for Maven inline mode.
 - [ ] Detect Maven project using `pom.xml`.
-- [ ] Support scanner mode values:
-  - [ ] `auto`
-  - [ ] `maven-inline`
+- [ ] Automatically detect Maven projects using `pom.xml`; do not require `BP_SONARQUBE_SCANNER_MODE`.
+- [ ] Format `BP_SONARQUBE_REPO_NAME` and `BP_SONARQUBE_REPO_BRANCH` to lowercase letters, numbers, and dashes only.
+- [ ] Generate project name/key as `<formatted-repo-name>-<formatted-repo-branch>` when overrides are empty.
+- [ ] Use the same effective value for SonarQube project name and project key.
 - [ ] For Maven projects, do not execute Maven from the SonarQube buildpack.
 - [ ] Read existing `BP_MAVEN_BUILD_ARGUMENTS`.
 - [ ] Preserve existing Maven args exactly where possible.
@@ -116,8 +118,8 @@ bs23-buildpacks/sonarqube
 - [ ] Default `BP_SONARQUBE_AUTO_CREATE_PROJECT=true`.
 - [ ] Query SonarQube project existence using API.
 - [ ] Create project if missing and auto-create is enabled.
-- [ ] Use `BP_SONARQUBE_PROJECT_KEY` as SonarQube project key.
-- [ ] Use `BP_SONARQUBE_PROJECT_NAME` if set; otherwise use project key as name.
+- [ ] Use the effective project name as the SonarQube project key.
+- [ ] Keep `BP_SONARQUBE_PROJECT_NAME` and `BP_SONARQUBE_PROJECT_KEY` optional overrides; generate from repo name/branch when empty.
 - [ ] Fail build if project creation fails while auto-create is enabled.
 - [ ] Fail or controlled no-op if project missing and auto-create is disabled.
 - [ ] Ensure API calls do not print Authorization headers or token.
@@ -258,10 +260,9 @@ stringData:
 ```yaml
 BP_SONARQUBE_ENABLED: "true"
 BP_SONARQUBE_URL: "https://sonarqube.example.com"
-BP_SONARQUBE_PROJECT_KEY: "<project>-<service-name>"
-BP_SONARQUBE_PROJECT_NAME: "<service-name>"
+BP_SONARQUBE_REPO_NAME: "<repo-name>"
+BP_SONARQUBE_REPO_BRANCH: "<repo-branch>"
 BP_SONARQUBE_STRICT: "false"
-BP_SONARQUBE_SCANNER_MODE: "auto"
 BP_SONARQUBE_AUTO_CREATE_PROJECT: "true"
 ```
 

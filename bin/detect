@@ -1,71 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+
 platform_path="${1:-}"
 plan_path="${2:-}"
 
-log() {
-  echo "sonarqube-buildpack: $*"
-}
-
-is_true() {
-  local value="${1:-false}"
-  value="${value,,}"
-  case "$value" in
-    true|1|yes|on)
-      return 0
-      ;;
-    false|0|no|off|"")
-      return 1
-      ;;
-    *)
-      return 2
-      ;;
-  esac
-}
-
-mode="${BP_SONARQUBE_SCANNER_MODE:-auto}"
 enabled="${BP_SONARQUBE_ENABLED:-}"
-
 enabled_status=0
 is_true "$enabled" || enabled_status=$?
 case "$enabled_status" in
-  0)
-    ;;
-  1)
-    log "BP_SONARQUBE_ENABLED is false or unset; buildpack optional skip"
-    exit 100
-    ;;
-  2)
-    log "Invalid BP_SONARQUBE_ENABLED value: ${enabled}"
-    exit 1
-    ;;
+  0) ;;
+  1) log "BP_SONARQUBE_ENABLED is false or unset; buildpack optional skip"; exit 100 ;;
+  2) fail "Invalid BP_SONARQUBE_ENABLED value: ${enabled}" ;;
 esac
 
 : "${BP_SONARQUBE_URL:?BP_SONARQUBE_URL is required when BP_SONARQUBE_ENABLED=true}"
 : "${BP_SONARQUBE_APIKEY:?BP_SONARQUBE_APIKEY is required when BP_SONARQUBE_ENABLED=true}"
-: "${BP_SONARQUBE_PROJECT_KEY:?BP_SONARQUBE_PROJECT_KEY is required when BP_SONARQUBE_ENABLED=true}"
 
-case "$mode" in
-  auto|maven-inline)
-    ;;
-  *)
-    log "Unsupported BP_SONARQUBE_SCANNER_MODE=$mode"
-    log "Current MVP supports: auto, maven-inline"
-    exit 1
-    ;;
-esac
-
-if [[ "$mode" == "maven-inline" ]]; then
-  if [[ ! -f "pom.xml" ]]; then
-    log "maven-inline mode requires pom.xml in source"
-    exit 1
-  fi
+if [[ -n "${BP_SONARQUBE_PROJECT_NAME:-}" && -n "${BP_SONARQUBE_PROJECT_KEY:-}" ]]; then
+  log "Using explicit project name: ${BP_SONARQUBE_PROJECT_NAME} / key: ${BP_SONARQUBE_PROJECT_KEY}"
 else
-  if [[ ! -f "pom.xml" ]]; then
-    log "auto mode did not find a Maven project; skipping"
-    exit 100
-  fi
+  : "${BP_SONARQUBE_REPO_NAME:?BP_SONARQUBE_REPO_NAME + BP_SONARQUBE_REPO_BRANCH are required when BP_SONARQUBE_PROJECT_NAME and BP_SONARQUBE_PROJECT_KEY are not both set}"
+  : "${BP_SONARQUBE_REPO_BRANCH:?BP_SONARQUBE_REPO_NAME + BP_SONARQUBE_REPO_BRANCH are required when BP_SONARQUBE_PROJECT_NAME and BP_SONARQUBE_PROJECT_KEY are not both set}"
+
+  repo_name_slug="$(normalize_identifier "$BP_SONARQUBE_REPO_NAME")"
+  [[ -n "$repo_name_slug" ]] || fail "BP_SONARQUBE_REPO_NAME must contain at least one letter or number after formatting"
+
+  repo_branch_slug="$(normalize_identifier "$BP_SONARQUBE_REPO_BRANCH")"
+  [[ -n "$repo_branch_slug" ]] || fail "BP_SONARQUBE_REPO_BRANCH must contain at least one letter or number after formatting"
+fi
+
+if [[ ! -f "pom.xml" ]]; then
+  log "No pom.xml found; current Maven MVP does not apply"
+  exit 100
 fi
 
 if [[ -n "$platform_path" ]]; then
@@ -75,10 +45,7 @@ fi
 
 if [[ -n "$plan_path" ]]; then
   mkdir -p "$(dirname "$plan_path")"
-  cat > "$plan_path" <<EOF
-[[provides]]
-name = "sonarqube"
-EOF
+  touch "$plan_path"
 fi
 
 log "SonarQube buildpack detected and enabled"

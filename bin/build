@@ -67,7 +67,16 @@ else
   log "Generated project name/key: ${project_name}"
 fi
 
-log "Detected Maven project for SonarQube analysis"
+if [[ -f "pom.xml" ]]; then
+  project_type="maven"
+elif [[ -f "build.gradle" || -f "build.gradle.kts" ]]; then
+  project_type="gradle"
+else
+  log "No pom.xml or build.gradle found; nothing to do"
+  exit 0
+fi
+
+log "Detected ${project_type} project for SonarQube analysis"
 
 search_response="$(sonar_api_get '/api/projects/search' 'projects' "$project_key")"
 if printf '%s' "$search_response" | grep -qF "\"key\":\"${project_key}\""; then
@@ -81,14 +90,13 @@ else
   log "SonarQube project ${project_key} created"
 fi
 
-sonar_args="sonar:sonar"
-sonar_args="${sonar_args} -Dsonar.host.url=${BP_SONARQUBE_URL}"
-sonar_args="${sonar_args} -Dsonar.token=${BP_SONARQUBE_APIKEY}"
-sonar_args="${sonar_args} -Dsonar.projectKey=${project_key}"
-sonar_args="${sonar_args} -Dsonar.projectName=${project_name}"
-sonar_args="${sonar_args} -Dsonar.qualitygate.wait=${QUALITY_GATE_WAIT}"
-[[ -z "${BP_SONARQUBE_PROJECT_VERSION:-}" ]] || sonar_args="${sonar_args} -Dsonar.projectVersion=${BP_SONARQUBE_PROJECT_VERSION}"
-[[ -z "${BP_SONARQUBE_EXTRA_ARGS:-}" ]] || sonar_args="${sonar_args} ${BP_SONARQUBE_EXTRA_ARGS}"
+sonar_props="-Dsonar.host.url=${BP_SONARQUBE_URL}"
+sonar_props="${sonar_props} -Dsonar.token=${BP_SONARQUBE_APIKEY}"
+sonar_props="${sonar_props} -Dsonar.projectKey=${project_key}"
+sonar_props="${sonar_props} -Dsonar.projectName=${project_name}"
+sonar_props="${sonar_props} -Dsonar.qualitygate.wait=${QUALITY_GATE_WAIT}"
+[[ -z "${BP_SONARQUBE_PROJECT_VERSION:-}" ]] || sonar_props="${sonar_props} -Dsonar.projectVersion=${BP_SONARQUBE_PROJECT_VERSION}"
+[[ -z "${BP_SONARQUBE_EXTRA_ARGS:-}" ]] || sonar_props="${sonar_props} ${BP_SONARQUBE_EXTRA_ARGS}"
 
 layer_dir="${LAYERS_DIR}/sonarqube-env"
 env_dir="${layer_dir}/env"
@@ -101,8 +109,15 @@ cache = false
 launch = false
 EOF
 
-printf '%s\n' "${sonar_args}" > "${env_dir}/BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS.override"
+if [[ "$project_type" == "maven" ]]; then
+  sonar_args="sonar:sonar ${sonar_props}"
+  printf '%s\n' "${sonar_args}" > "${env_dir}/BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS.override"
+  log "SonarQube analysis appended to BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS (token redacted):"
+else
+  sonar_args="sonar ${sonar_props}"
+  printf '%s\n' "${sonar_args}" > "${env_dir}/BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS.override"
+  log "SonarQube analysis appended to BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS (token redacted):"
+fi
 
-log "SonarQube analysis appended to BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS (token redacted):"
 log "${sonar_args//-Dsonar.token=*/"-Dsonar.token=***"}"
 log "SonarQube buildpack completed"

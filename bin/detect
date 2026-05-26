@@ -33,8 +33,12 @@ else
   [[ -n "$repo_branch_slug" ]] || fail "BP_SONARQUBE_REPO_BRANCH must contain at least one letter or number after formatting"
 fi
 
-if [[ ! -f "pom.xml" ]]; then
-  log "No pom.xml found; current Maven MVP does not apply"
+if [[ -f "pom.xml" ]]; then
+  log "Detected Maven project"
+elif [[ -f "build.gradle" || -f "build.gradle.kts" ]]; then
+  log "Detected Gradle project"
+else
+  log "No pom.xml or build.gradle found; skipping"
   exit 100
 fi
 

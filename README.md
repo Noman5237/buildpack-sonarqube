@@ -1,6 +1,6 @@
 # SonarQube Buildpack (CNB for Paketo Java flow)
 
-A Cloud Native Buildpack (`bs23-buildpacks/sonarqube`) that runs alongside Paketo Java in a kpack builder. When enabled, it does **not** execute Maven itself — it mutates `BP_MAVEN_BUILD_ARGUMENTS` so the downstream Paketo Maven buildpack runs `package sonar:sonar` in a single Maven invocation. This avoids a second compile and keeps build time close to baseline.
+A Cloud Native Buildpack (`bs23-buildpacks/sonarqube`) that runs alongside Paketo Java in a kpack builder. When enabled, it does **not** execute Maven or Gradle itself — it mutates `BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS` (Maven) or `BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS` (Gradle) so the downstream Paketo buildpack runs the SonarQube analysis in a single build invocation. This avoids a second compile and keeps build time close to baseline.
 
 This file is the single source of truth for the buildpack. Operational checklists live in [`tasks.md`](./tasks.md).
 
@@ -14,7 +14,8 @@ This file is the single source of truth for the buildpack. Operational checklist
   - Branch isolation is achieved by generating a per-branch project name/key
 - **Token source:** Kubernetes Secret (never ConfigMap)
 - **Buildpack API:** `0.10`
-- **Maven plugin resolution:** Sonar Maven plugin must be reachable from the build pod (direct or via internal Nexus/Artifactory mirror)
+- **Maven:** Sonar Maven plugin must be reachable from the build pod (direct or via internal Nexus/Artifactory mirror)
+- **Gradle:** Project must have the `org.sonarqube` plugin applied (e.g., via `fintech-psp-conventions`). Plugin version 7.x is required for Gradle 9 compatibility.
 
 ---
 
@@ -33,11 +34,10 @@ order:
 
 Because buildpacks execute in order, this one contributes a **build-only layer** (`sonarqube-env`) whose `env/*.override` files are picked up by the subsequent Paketo Java buildpack in the same build:
 
-| Layer env file | Effect |
-|---|---|
-| `BP_MAVEN_BUILD_ARGUMENTS.override` | replaces Maven args used by Paketo Maven |
-| `SONAR_TOKEN.override` | exposes the Sonar token to the Maven plugin at build time |
-| `SONAR_HOST_URL.override` | exposes the SonarQube URL at build time |
+| Layer env file | Project type | Effect |
+|---|---|---|
+| `BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS.override` | Maven | appends `sonar:sonar` + Sonar properties to Paketo Maven's extra args |
+| `BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS.override` | Gradle | appends `sonar` + Sonar properties to Paketo Gradle's extra args |
 
 Layer metadata: `build = true`, `launch = false`, `cache = false` — none of these values reach the runtime image.
 
@@ -51,25 +51,25 @@ Layer metadata: `build = true`, `launch = false`, `cache = false` — none of th
   - `false`/unset → exit `100` (optional skip)
   - `true` → continue
   - invalid → exit `1`
-- Requires `BP_SONARQUBE_URL`, `BP_SONARQUBE_APIKEY`, `BP_SONARQUBE_REPO_NAME`, `BP_SONARQUBE_REPO_BRANCH`
+- Requires `BP_SONARQUBE_URL` and `BP_SONARQUBE_APIKEY`
+- Requires either (`BP_SONARQUBE_PROJECT_NAME` + `BP_SONARQUBE_PROJECT_KEY`) or (`BP_SONARQUBE_REPO_NAME` + `BP_SONARQUBE_REPO_BRANCH`)
 - Slugifies repo name + branch (lowercase, non-`[a-z0-9]` → `-`); each must contain at least one alphanumeric
-- Requires a `pom.xml` in the source root — no `pom.xml` → exit `100`
-- Writes a minimal plan with `[[provides]] name = "sonarqube"`
+- Requires `pom.xml` (Maven) or `build.gradle`/`build.gradle.kts` (Gradle) in the source root — neither found → exit `100`
 
 ### `bin/build`
 
-1. Re-validates enabled state and required env (no-op `exit 0` if disabled or no `pom.xml`).
+1. Detects project type from `pom.xml` → `maven`, `build.gradle`/`build.gradle.kts` → `gradle`. No match → `exit 0`.
 2. Resolves the effective **project name** (and uses the same value as **project key**):
-   - `BP_SONARQUBE_PROJECT_NAME` → `BP_SONARQUBE_PROJECT_KEY` → `<repo-name-slug>-<repo-branch-slug>`
+   - Explicit: `BP_SONARQUBE_PROJECT_NAME` + `BP_SONARQUBE_PROJECT_KEY`
+   - Generated: `<repo-name-slug>-<repo-branch-slug>` from `BP_SONARQUBE_REPO_NAME` + `BP_SONARQUBE_REPO_BRANCH`
 3. Calls `GET /api/projects/search?projects=<key>`; if missing and `BP_SONARQUBE_AUTO_CREATE_PROJECT=true`, calls `POST /api/projects/create`. Failure → fail build.
-4. Mutates Maven args:
-   - Starts from `BP_MAVEN_BUILD_ARGUMENTS` or default `--batch-mode -Dmaven.test.skip=true package`
-   - Appends `sonar:sonar` if absent
-   - Appends `-Dsonar.host.url`, `-Dsonar.projectKey`, `-Dsonar.projectName`, `-Dsonar.qualitygate.wait` (only if not already present)
-   - Appends `BP_SONARQUBE_EXTRA_ARGS` verbatim if set
-   - Never appends `-Dsonar.token=...` — token flows via `SONAR_TOKEN` env
-   - Never appends `sonar.branch.name` (Community edition has no branch analysis)
-5. Writes the three `*.override` files and the layer TOML.
+4. Assembles Sonar properties:
+   - `-Dsonar.host.url`, `-Dsonar.token`, `-Dsonar.projectKey`, `-Dsonar.projectName`, `-Dsonar.qualitygate.wait`
+   - `-Dsonar.projectVersion` if `BP_SONARQUBE_PROJECT_VERSION` is set
+   - `BP_SONARQUBE_EXTRA_ARGS` appended verbatim if set
+5. Writes a single `*.override` file into the build layer:
+   - Maven: `BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS.override` ← `sonar:sonar <sonar-props>`
+   - Gradle: `BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS.override` ← `sonar <sonar-props>`
 
 ---
 
@@ -109,8 +109,9 @@ Slugification: lowercase, all non-`[a-z0-9]` runs replaced with a single `-`, le
 |---|---|---|
 | `BP_SONARQUBE_STRICT` | `false` | `true` → `-Dsonar.qualitygate.wait=true` (build fails on QG failure) |
 | `BP_SONARQUBE_AUTO_CREATE_PROJECT` | `true` | `false` → fail when project missing |
-| `BP_SONARQUBE_EXTRA_ARGS` | unset | appended verbatim to Maven args |
-| `BP_MAVEN_BUILD_ARGUMENTS` | `--batch-mode -Dmaven.test.skip=true package` | application-supplied args are preserved |
+| `BP_SONARQUBE_PROJECT_VERSION` | unset | sets `-Dsonar.projectVersion` |
+| `BP_SONARQUBE_EXTRA_ARGS` | unset | appended verbatim to the Sonar properties |
+| `BP_SONARQUBE_SAMPLER_PROBABILITY` | `0.1` | fraction of builds that run analysis (0 = never, 1 = always, 0.1 = 10%) |
 
 ---
 
@@ -119,14 +120,17 @@ Slugification: lowercase, all non-`[a-z0-9]` runs replaced with a single `-`, le
 | Scenario | Outcome |
 |---|---|
 | `BP_SONARQUBE_ENABLED` unset / `false` | detect `exit 100`; build continues without SonarQube |
-| `BP_SONARQUBE_ENABLED=true`, any required var missing | detect/build fails |
-| Enabled but no `pom.xml` | detect `exit 100` (this MVP is Maven-only) |
+| `BP_SONARQUBE_ENABLED=true`, any required var missing | detect fails |
+| Enabled but no `pom.xml` or `build.gradle` found | detect `exit 100` |
+| Sampler rolls above threshold | detect `exit 100`; build continues without SonarQube |
+| `BP_SONARQUBE_SAMPLER_PROBABILITY` not a number or out of 0–1 range | detect fails |
 | Project missing, auto-create enabled | project created, build continues |
 | Project missing, auto-create disabled | build fails |
 | Project create API call fails | build fails |
-| Strict mode + quality gate fails | Maven (in next buildpack) fails → image not published |
+| Strict mode + quality gate fails | build tool (in next buildpack) fails → image not published |
 | Non-strict + quality gate fails | analysis uploaded, image still publishes |
 | Invalid boolean value for any `_ENABLED`/`_STRICT`/`_AUTO_CREATE_PROJECT` | build fails |
+| Gradle project without `org.sonarqube` plugin applied | Gradle task `sonar` not found → build fails |
 
 ---
 
@@ -135,23 +139,24 @@ Slugification: lowercase, all non-`[a-z0-9]` runs replaced with a single `-`, le
 What logs **always show**:
 
 ```
-sonarqube-buildpack: Detected Maven project for SonarQube analysis
-sonarqube-buildpack: Repository name / branch / slugged values
-sonarqube-buildpack: Project name/key: <resolved>
+sonarqube-buildpack: Detected maven project for SonarQube analysis
+sonarqube-buildpack: Repository: <name> -> <slug> / <branch> -> <slug>
+sonarqube-buildpack: Generated project name/key: <slug>-<slug>
 sonarqube-buildpack: SonarQube project <key> already exists | created
-sonarqube-buildpack: Prepared Maven args for downstream buildpacks: ...
+sonarqube-buildpack: SonarQube analysis appended to BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS (token redacted):
+sonarqube-buildpack: sonar:sonar -Dsonar.host.url=... -Dsonar.token=*** ...
 ```
 
 What logs **never show**:
 
-- `BP_SONARQUBE_APIKEY` / `SONAR_TOKEN` values
-- `Authorization` headers
-- `sonar.token=...` (token is never placed on the Maven command line)
+- `BP_SONARQUBE_APIKEY` value
+- `Authorization` header contents
+- The actual token value (replaced with `***` in the logged command line)
 
 Implementation choices that enforce this:
 
 - No `set -x` in `bin/detect` or `bin/build`
-- Token only ever written to the `SONAR_TOKEN.override` file inside a build-only layer
+- Token is injected as `-Dsonar.token=<value>` in the `*.override` env file inside a **build-only** layer; the log line redacts it to `***`
 - Layer metadata `launch = false` keeps the token out of the runtime image
 
 ---
@@ -220,36 +225,51 @@ The script wraps `pack buildpack package` against `package.toml`.
 
 ## Local testing
 
-[`tests/test-local.sh`](./tests/test-local.sh) drives a `pack build` against a sample Maven app:
+### Unit / integration tests
+
+[`tests/pack.test.sh`](./tests/pack.test.sh) runs the detect and build scripts against fixture inputs using `pack`:
+
+```bash
+./tests/pack.test.sh
+```
+
+### Benchmarking
+
+[`tests/benchmark.sh`](./tests/benchmark.sh) drives three back-to-back `pack build` runs against a real project and reports wall-clock timing for each scenario:
+
+| Scenario | Typical wall time |
+|---|---|
+| SonarQube disabled | ~170 s |
+| Enabled, strict=false | ~216 s |
+| Enabled, strict=true | ~225 s |
 
 ```bash
 export BP_SONARQUBE_URL=https://sonarqube.example.com
 export BP_SONARQUBE_APIKEY=...
 export BP_SONARQUBE_REPO_NAME=test-app
 export BP_SONARQUBE_REPO_BRANCH=main
-./tests/test-local.sh
+./tests/benchmark.sh
 ```
 
-Expected:
+Expected for an enabled run:
 
-- Maven runs once, with `package sonar:sonar`
-- Tests stay skipped (`-Dmaven.test.skip=true` preserved)
+- Build tool runs once, with `sonar:sonar` (Maven) or `sonar` (Gradle) appended to its args
 - SonarQube project is created if missing
-- Token never appears in `pack` output
+- Token never appears unredacted in `pack` output
 - Build only fails on quality gate when `BP_SONARQUBE_STRICT=true`
 
 ---
 
 ## Current scope and future work
 
-Implemented (MVP):
+Implemented:
 
-- Java/Maven inline analysis via Paketo Java env override
+- Maven inline analysis via `BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS` env override
+- Gradle inline analysis via `BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS` env override (requires `org.sonarqube` plugin on the project — provided by `fintech-psp-conventions`)
 - SonarQube project auto-create
 - Build-only layer that keeps token out of the runtime image
 
 Not yet implemented (see [`tasks.md`](./tasks.md)):
 
 - Vendored SonarScanner CLI for non-Java projects (Node/Python/PHP)
-- Gradle plugin detection and `./gradlew sonar`
 - Production rollout to non-Java builders

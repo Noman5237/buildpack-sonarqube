@@ -42,6 +42,28 @@ else
   exit 100
 fi
 
+sampler_prob="${BP_SONARQUBE_SAMPLER_PROBABILITY:-0.1}"
+[[ "$sampler_prob" =~ ^[0-9]*\.?[0-9]+$ ]] \
+  || fail "Invalid BP_SONARQUBE_SAMPLER_PROBABILITY value: ${sampler_prob} (must be a number between 0 and 1)"
+awk -v p="$sampler_prob" 'BEGIN { exit (p >= 0 && p <= 1) ? 0 : 1 }' \
+  || fail "BP_SONARQUBE_SAMPLER_PROBABILITY=${sampler_prob} is out of range (must be 0–1)"
+
+if awk -v p="$sampler_prob" 'BEGIN { exit (p <= 0) ? 0 : 1 }'; then
+  log "Sampler: probability=0, skipping"
+  exit 100
+elif awk -v p="$sampler_prob" 'BEGIN { exit (p >= 1) ? 0 : 1 }'; then
+  log "Sampler: probability=1, always running"
+else
+  random_int=$(od -An -N2 -tu2 < /dev/urandom | tr -d ' \n')
+  threshold=$(awk -v p="$sampler_prob" 'BEGIN { printf "%d", p * 65536 }')
+  if [[ "$random_int" -lt "$threshold" ]]; then
+    log "Sampler: roll=${random_int}, threshold=${threshold} (${sampler_prob}), running"
+  else
+    log "Sampler: roll=${random_int}, threshold=${threshold} (${sampler_prob}), skipping"
+    exit 100
+  fi
+fi
+
 if [[ -n "$platform_path" ]]; then
   platform_path="${platform_path%/}/"
   log "platform_path: ${platform_path}"

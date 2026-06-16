@@ -110,7 +110,13 @@ launch = false
 EOF
 
 if [[ "$project_type" == "maven" ]]; then
-  sonar_args="sonar:sonar ${sonar_props}"
+  if [[ -n "${BP_SONARQUBE_MAVEN_PLUGIN_VERSION:-}" ]]; then
+    sonar_goal="org.sonarsource.scanner.maven:sonar-maven-plugin:${BP_SONARQUBE_MAVEN_PLUGIN_VERSION}:sonar"
+    log "Using pinned sonar-maven-plugin version: ${BP_SONARQUBE_MAVEN_PLUGIN_VERSION}"
+  else
+    sonar_goal="sonar:sonar"
+  fi
+  sonar_args="${sonar_goal} ${sonar_props}"
   printf '%s\n' "${sonar_args}" > "${env_dir}/BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS.override"
   log "SonarQube analysis appended to BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS (token redacted):"
 else

@@ -112,6 +112,7 @@ Slugification: lowercase, all non-`[a-z0-9]` runs replaced with a single `-`, le
 | `BP_SONARQUBE_PROJECT_VERSION` | unset | sets `-Dsonar.projectVersion` |
 | `BP_SONARQUBE_EXTRA_ARGS` | unset | appended verbatim to the Sonar properties |
 | `BP_SONARQUBE_SAMPLER_PROBABILITY` | `0.1` | fraction of builds that run analysis (0 = never, 1 = always, 0.1 = 10%) |
+| `BP_SONARQUBE_MAVEN_PLUGIN_VERSION` | unset | pin sonar-maven-plugin to a specific version (e.g. `3.11.0.3922` for Java 11 projects); unset uses the latest resolved by Maven |
 
 ---
 

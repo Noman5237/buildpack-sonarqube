@@ -1,6 +1,6 @@
 api = "0.10"
 
 [buildpack]
-id = "bs23-buildpacks/sonarqube"
+id = "noman5237-buildpacks/sonarqube"
 name = "BS23 SonarQube Buildpack"
-version = "0.1.0"
+version = "0.2.0"

@@ -1,6 +1,6 @@
 # SonarQube Buildpack (CNB for Paketo Java flow)
 
-A Cloud Native Buildpack (`bs23-buildpacks/sonarqube`) that runs alongside Paketo Java in a kpack builder. When enabled, it does **not** execute Maven or Gradle itself — it mutates `BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS` (Maven) or `BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS` (Gradle) so the downstream Paketo buildpack runs the SonarQube analysis in a single build invocation. This avoids a second compile and keeps build time close to baseline.
+A Cloud Native Buildpack (`noman5237-buildpacks/sonarqube`) that runs alongside Paketo Java in a kpack builder. When enabled, it does **not** execute Maven or Gradle itself — it mutates `BP_MAVEN_ADDITIONAL_BUILD_ARGUMENTS` (Maven) or `BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS` (Gradle) so the downstream Paketo buildpack runs the SonarQube analysis in a single build invocation. This avoids a second compile and keeps build time close to baseline.
 
 This file is the single source of truth for the buildpack. Operational checklists live in [`tasks.md`](./tasks.md).
 
@@ -26,7 +26,7 @@ The buildpack runs **before** `paketo-buildpacks/java` in the builder group:
 ```yaml
 order:
 - group:
-  - id: bs23-buildpacks/sonarqube
+  - id: noman5237-buildpacks/sonarqube
     optional: true
   - id: paketo-buildpacks/java
   - id: paketo-buildpacks/opentelemetry
@@ -179,7 +179,7 @@ Both base and full Java builders should be updated to:
 ```yaml
 order:
 - group:
-  - id: bs23-buildpacks/sonarqube
+  - id: noman5237-buildpacks/sonarqube
     optional: true
   - id: paketo-buildpacks/java
   - id: paketo-buildpacks/opentelemetry
